@@ -1,0 +1,100 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "Simple EC2 instance in a public subnet"
+
+Parameters:
+  VpcId:
+    Type: String
+    Description: VPC ID where the EC2 instance will be created
+
+  PublicSubnetId:
+    Type: String
+    Description: Public subnet ID for the EC2 instance
+
+  AmiId:
+    Type: String
+    Default: ami-0fa3fe0fa7920f68e
+    Description: AMI ID for the EC2 instance (Amazon Linux 2)
+
+  KeyName:
+    Type: AWS::EC2::KeyPair::KeyName
+    Default: 698finalproject
+    Description: Name of an existing EC2 key pair to enable SSH access
+
+  InstanceType:
+    Type: String
+    Default: t3.micro
+    AllowedValues:
+      - t2.micro
+      - t3.micro
+      - t3.small
+    Description: EC2 instance type
+
+Resources:
+  WebServerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Enable SSH and HTTP access
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          FromPort: 0
+          ToPort: 0
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: simple-ec2-sg
+
+  WebServerInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !Ref AmiId
+      InstanceType: !Ref InstanceType
+      KeyName: !Ref KeyName
+      SubnetId: !Ref PublicSubnetId
+      SecurityGroupIds:
+        - !Ref WebServerSecurityGroup
+      Tags:
+        - Key: Name
+          Value: simple-ec2-public
+      UserData:
+        Fn::Base64: |
+          #!/bin/bash
+          yum update -y
+          yum install -y httpd
+          systemctl enable httpd
+          systemctl start httpd
+
+          cat > /var/www/html/index.html << 'EOF'
+          <html>
+          <head>
+            <title>AWS Simple EC2</title>
+          </head>
+          <body>
+            <h1>Hello from a simple EC2 instance!</h1>
+            <p>This instance was created using a basic CloudFormation template
+            in a public subnet.</p>
+          </body>
+          </html>
+          EOF
+
+Outputs:
+  InstanceId:
+    Description: ID of the EC2 instance
+    Value: !Ref WebServerInstance
+
+  InstancePublicIp:
+    Description: Public IP address of the EC2 instance
+    Value: !GetAtt WebServerInstance.PublicIp
+
+  InstancePublicDns:
+    Description: Public DNS name of the EC2 instance
+    Value: !GetAtt WebServerInstance.PublicDnsName

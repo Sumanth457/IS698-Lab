@@ -1,0 +1,99 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "S3 -> Lambda -> CloudWatch logging for new uploads"
+
+Parameters:
+  BucketName:
+    Type: String
+    Description: Globally unique S3 bucket name to store uploads
+
+Resources:
+  S3UploadLoggerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${AWS::StackName}-s3-upload-logger-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        # Gives Lambda permission to write to CloudWatch Logs
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: S3ReadAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:GetObjectTagging
+                Resource: !Sub "arn:aws:s3:::${BucketName}/*"
+
+  S3UploadLoggerLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-s3-upload-logger"
+      Runtime: python3.11
+      Handler: index.lambda_handler
+      Role: !GetAtt S3UploadLoggerRole.Arn
+      Timeout: 10
+      Code:
+        ZipFile: |
+          import json
+          import logging
+
+          logger = logging.getLogger()
+          logger.setLevel(logging.INFO)
+
+          def lambda_handler(event, context):
+              # Log the raw event
+              logger.info("Received S3 event: %s", json.dumps(event))
+
+              records = event.get("Records", [])
+              for record in records:
+                  s3 = record.get("s3", {})
+                  bucket = s3.get("bucket", {}).get("name")
+                  obj = s3.get("object", {})
+                  key = obj.get("key")
+                  size = obj.get("size")
+                  event_time = record.get("eventTime")
+
+                  logger.info(
+                      "New object uploaded: bucket=%s key=%s size=%s eventTime=%s",
+                      bucket, key, size, event_time
+                  )
+
+              return {
+                  "statusCode": 200,
+                  "body": f"Processed {len(records)} record(s)"
+              }
+
+  S3UploadBucket:
+    Type: AWS::S3::Bucket
+    DependsOn: AllowS3InvokeLambda
+    Properties:
+      BucketName: !Ref BucketName
+      NotificationConfiguration:
+        LambdaConfigurations:
+          - Event: "s3:ObjectCreated:*"
+            Function: !GetAtt S3UploadLoggerLambda.Arn
+
+  AllowS3InvokeLambda:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref S3UploadLoggerLambda
+      Action: lambda:InvokeFunction
+      Principal: s3.amazonaws.com
+      SourceArn: !Sub "arn:aws:s3:::${BucketName}"
+
+Outputs:
+  BucketNameOutput:
+    Description: Name of the S3 bucket where uploads are logged
+    Value: !Ref BucketName
+
+  LambdaNameOutput:
+    Description: Name of the Lambda function that logs uploads
+    Value: !Ref S3UploadLoggerLambda

@@ -1,0 +1,132 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "Auto Scaling Group for simple EC2 web app in public subnets"
+
+Parameters:
+  VpcId:
+    Type: String
+    Description: VPC ID where the EC2 instances will be created
+
+  PublicSubnet1Id:
+    Type: String
+    Description: First public subnet ID
+
+  PublicSubnet2Id:
+    Type: String
+    Description: Second public subnet ID
+
+  WebSecurityGroupId:
+    Type: String
+    Description: Security group ID used by your existing EC2 web server
+
+  DBEndpointAddress:
+    Type: String
+    Description: RDS endpoint from RDS stack output
+
+  DBName:
+    Type: String
+    Default: cloudprojectdb
+    Description: Database name used on RDS
+
+  DBUsername:
+    Type: String
+    Default: admin
+    NoEcho: true
+    Description: RDS master username (same as RDS stack)
+
+  DBPassword:
+    Type: String
+    Default: admin1234
+    NoEcho: true
+    Description: RDS master password (same as RDS stack)
+
+Resources:
+  WebLaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateName: !Sub "${AWS::StackName}-web-lt"
+      LaunchTemplateData:
+        ImageId: ami-0fa3fe0fa7920f68e
+        InstanceType: t3.micro
+        KeyName: 698finalproject
+        SecurityGroupIds:
+          - !Ref WebSecurityGroupId
+        UserData:
+          Fn::Base64:
+            Fn::Sub: |
+              #!/bin/bash
+              yum update -y
+              yum install -y httpd php php-mysqlnd
+              systemctl enable httpd
+              systemctl start httpd
+
+              # Static home page
+              cat > /var/www/html/index.html << 'EOF'
+              <html>
+              <head>
+                <title>AWS Simple EC2 (Auto Scaling)</title>
+              </head>
+              <body>
+                <h1>Hello from an Auto Scaling EC2 instance!</h1>
+                <p>This instance was launched by an Auto Scaling Group.</p>
+                <p>To test the database connection, open <code>/db-check.php</code>.</p>
+              </body>
+              </html>
+              EOF
+
+              # DB connection check page
+              cat > /var/www/html/db-check.php << EOF
+              <?php
+              \$db_host = "${DBEndpointAddress}";
+              \$db_name = "${DBName}";
+              \$db_user = "${DBUsername}";
+              \$db_pass = "${DBPassword}";
+
+              \$conn = new mysqli(\$db_host, \$db_user, \$db_pass, \$db_name);
+
+              if (\$conn->connect_error) {
+                  echo "Database connection failed: " . \$conn->connect_error;
+              } else {
+                  echo "Database connection successful to database '\$db_name' on '\$db_host'.";
+              }
+
+              \$conn->close();
+              ?>
+              EOF
+
+  WebAutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      VPCZoneIdentifier:
+        - !Ref PublicSubnet1Id
+        - !Ref PublicSubnet2Id
+      MinSize: "1"
+      MaxSize: "3"
+      DesiredCapacity: "1"
+      LaunchTemplate:
+        LaunchTemplateId: !Ref WebLaunchTemplate
+        Version: !GetAtt WebLaunchTemplate.LatestVersionNumber
+      HealthCheckType: EC2
+      HealthCheckGracePeriod: 120
+      Tags:
+        - Key: Name
+          Value: asg-web-instance
+          PropagateAtLaunch: true
+
+  CpuTargetTrackingPolicy:
+    Type: AWS::AutoScaling::ScalingPolicy
+    Properties:
+      AutoScalingGroupName: !Ref WebAutoScalingGroup
+      PolicyType: TargetTrackingScaling
+      TargetTrackingConfiguration:
+        PredefinedMetricSpecification:
+          PredefinedMetricType: ASGAverageCPUUtilization
+        TargetValue: 50.0
+
+Outputs:
+  AutoScalingGroupName:
+    Description: Name of the Auto Scaling Group
+    Value: !Ref WebAutoScalingGroup
+
+  LaunchTemplateId:
+    Description: ID of the Launch Template
+    Value: !Ref WebLaunchTemplate
